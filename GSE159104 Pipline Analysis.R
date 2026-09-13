@@ -1,9 +1,3 @@
-###############################################################################
-## GSE159104: ADHD vs CTRL transcriptome analysis
-## Pipeline: CPM -> gene-level expression -> PCA -> limma DEG
-##           -> volcano/heatmap -> selected genes -> GO/KEGG ORA -> GSEA
-###############################################################################
-
 rm(list = ls())
 options(stringsAsFactors = FALSE)
 set.seed(1234)
@@ -12,7 +6,7 @@ set.seed(1234)
 ## 0. Working directory and output folders
 ###############################################################################
 
-setwd("C:/Users/xieru/Desktop/ADHD讲人群单独/EarlyLIFE版本/ADVS返修")
+setwd("Your path")
 
 out_dirs <- c(
     "01_metadata",
@@ -24,9 +18,7 @@ out_dirs <- c(
     "07_selected_genes",
     "07_selected_genes/individual",
     "08_GO_KEGG",
-    "09_GSEA",
-    "09_GSEA/single_pathway",
-    "09_GSEA/ridgeplot"
+    "09_GSEA"
 )
 
 invisible(lapply(out_dirs, dir.create, showWarnings = FALSE, recursive = TRUE))
@@ -200,7 +192,6 @@ cat("Gene-level NA count:", sum(is.na(expr_gene)), "\n")
 
 ###############################################################################
 ## 6. Build subject metadata and merge repeated measurements
-##    Twin-pair information is deliberately not used.
 ###############################################################################
 
 meta <- data.frame(
@@ -320,7 +311,7 @@ write.csv(
 )
 
 ###############################################################################
-## 8. Publication-quality PCA (no outlier removal)
+## 8. PCA 
 ###############################################################################
 
 gene_var <- apply(expr_filt, 1, var, na.rm = TRUE)
@@ -460,7 +451,6 @@ deg <- deg[, c(
 
 ###############################################################################
 ## 10. DEG selection: BH-adjusted FDR < 0.05 and |logFC| > log2(1.25)
-##     (Fixed rule; no nominal-P fallback.)
 ###############################################################################
 
 FDR_CUTOFF <- 0.05
@@ -508,7 +498,7 @@ write.csv(
 )
 
 ###############################################################################
-## 11. Publication-quality volcano plot (FDR-based)
+## 11. Volcano plot (FDR-based)
 ###############################################################################
 
 deg$plot_sig_value <- deg$adj.P.Val
@@ -686,9 +676,7 @@ pheatmap(
 dev.off()
 
 ###############################################################################
-## 13. Selected genes: one boxplot PDF per gene
-##     Statistical display is BH-adjusted FDR for every gene
-##     (fixed; no per-gene adaptive switching).
+## 13. Selected genes: one boxplot PDF per gene  
 ###############################################################################
 
 target_genes <- c(
@@ -901,7 +889,6 @@ write.csv(
 
 ###############################################################################
 ## 14. GO / KEGG ORA with BH-adjusted FDR < 0.05
-##     (Fixed rule; no nominal-P fallback.)
 ###############################################################################
 
 deg_symbols <- unique(as.character(deg_sig$Feature))
@@ -1000,154 +987,7 @@ if (length(deg_symbols) == 0) {
 }
 
 ###############################################################################
-## 15. Enrichment selection: BH-adjusted FDR < 0.05 (fixed rule)
-###############################################################################
-
-select_enrichment <- function(
-    result_df,
-    top_n = 20,
-    fdr_cutoff = 0.05
-) {
-    if (is.null(result_df) || nrow(result_df) == 0) {
-        return(list(
-            data = data.frame(),
-            mode = "None",
-            metric_col = NA_character_,
-            metric_label = "None"
-        ))
-    }
-
-    fdr_df <- result_df[
-        !is.na(result_df$p.adjust) & result_df$p.adjust < fdr_cutoff,
-        ,
-        drop = FALSE
-    ]
-
-    if (nrow(fdr_df) > 0) {
-        fdr_df <- fdr_df[order(fdr_df$p.adjust, fdr_df$pvalue), , drop = FALSE]
-        return(list(
-            data = head(fdr_df, top_n),
-            mode = "BH-adjusted FDR < 0.05",
-            metric_col = "p.adjust",
-            metric_label = "FDR"
-        ))
-    }
-
-    # No FDR-significant term: return nothing rather than silently
-    # falling back to nominal P, to stay consistent with the FDR policy.
-    return(list(
-        data = data.frame(),
-        mode = "No term reached BH-adjusted FDR < 0.05",
-        metric_col = NA_character_,
-        metric_label = "None"
-    ))
-}
-
-parse_gene_ratio <- function(x) {
-    vapply(
-        strsplit(as.character(x), "/"),
-        function(z) {
-            if (length(z) != 2) return(NA_real_)
-            as.numeric(z[1]) / as.numeric(z[2])
-        },
-        FUN.VALUE = numeric(1)
-    )
-}
-
-make_enrichment_bubble <- function(
-    result_df,
-    plot_title,
-    output_prefix,
-    top_n = 20
-) {
-    selected <- select_enrichment(result_df, top_n = top_n)
-    df <- selected$data
-
-    if (nrow(df) == 0) {
-        message(plot_title, ": ", selected$mode, " - bubble plot skipped.")
-        write.csv(
-            data.frame(message = selected$mode),
-            paste0("08_GO_KEGG/", output_prefix, "_skipped.csv"),
-            row.names = FALSE
-        )
-        return(NULL)
-    }
-
-    metric <- df[[selected$metric_col]]
-    df$plot_metric <- metric
-    df$minus_log10_metric <- -log10(pmax(metric, 1e-300))
-    df$GeneRatio_numeric <- parse_gene_ratio(df$GeneRatio)
-    df$Description_plot <- stringr::str_wrap(df$Description, width = 42)
-
-    df <- df[order(df$plot_metric), , drop = FALSE]
-    df$Description_plot <- factor(
-        df$Description_plot,
-        levels = rev(unique(df$Description_plot))
-    )
-
-    p <- ggplot(
-        df,
-        aes(x = GeneRatio_numeric, y = Description_plot)
-    ) +
-        geom_point(
-            aes(size = Count, color = minus_log10_metric),
-            alpha = 0.88
-        ) +
-        scale_size_continuous(range = c(3, 9)) +
-        scale_color_gradient(low = "#4DBBD5", high = "#E64B35") +
-        labs(
-            title = plot_title,
-            subtitle = selected$mode,
-            x = "Gene Ratio",
-            y = NULL,
-            size = "Gene count",
-            color = expression(-log[10]~"FDR")
-        ) +
-        theme_classic(base_size = 13) +
-        theme(
-            plot.title = element_text(size = 15, face = "bold", hjust = 0.5),
-            plot.subtitle = element_text(size = 10, hjust = 0.5, color = "grey35"),
-            axis.title.x = element_text(face = "bold"),
-            axis.text.y = element_text(size = 9.5, color = "black"),
-            legend.title = element_text(face = "bold")
-        )
-
-    print(p)
-
-    ggsave(
-        paste0("08_GO_KEGG/", output_prefix, ".pdf"),
-        p,
-        device = cairo_pdf,
-        width = 9,
-        height = 7.5
-    )
-
-    ggsave(
-        paste0("08_GO_KEGG/", output_prefix, ".png"),
-        p,
-        width = 9,
-        height = 7.5,
-        dpi = 600
-    )
-
-    write.csv(
-        df,
-        paste0("08_GO_KEGG/", output_prefix, "_selected.csv"),
-        row.names = FALSE
-    )
-
-    return(invisible(p))
-}
-
-if (exists("go_bp_df")) {
-    make_enrichment_bubble(go_bp_df, "GO Biological Process", "GO_BP_bubble", 20)
-    make_enrichment_bubble(go_cc_df, "GO Cellular Component", "GO_CC_bubble", 20)
-    make_enrichment_bubble(go_mf_df, "GO Molecular Function", "GO_MF_bubble", 20)
-    make_enrichment_bubble(kegg_df, "KEGG Pathway Enrichment", "KEGG_bubble", 20)
-}
-
-###############################################################################
-## 16. Whole-transcriptome GSEA: Hallmark + Reactome
+## 15. Whole-transcriptome GSEA: Hallmark + Reactome
 ###############################################################################
 
 gene_list <- deg$t
@@ -1249,47 +1089,7 @@ write.csv(hallmark_res, "09_GSEA/Hallmark_GSEA_all.csv", row.names = FALSE)
 write.csv(reactome_res, "09_GSEA/Reactome_GSEA_all.csv", row.names = FALSE)
 
 ###############################################################################
-## 17. PI3K/AKT/NFE2L2-focused GSEA tables
-###############################################################################
-
-hallmark_focus_names <- c(
-    "HALLMARK_PI3K_AKT_MTOR_SIGNALING",
-    "HALLMARK_MTORC1_SIGNALING",
-    "HALLMARK_REACTIVE_OXYGEN_SPECIES_PATHWAY",
-    "HALLMARK_PEROXISOME",
-    "HALLMARK_OXIDATIVE_PHOSPHORYLATION"
-)
-
-hallmark_focus <- hallmark_res[
-    hallmark_res$ID %in% hallmark_focus_names,
-    ,
-    drop = FALSE
-]
-
-write.csv(
-    hallmark_focus,
-    "09_GSEA/Hallmark_PI3K_AKT_Nrf2_focus.csv",
-    row.names = FALSE
-)
-
-reactome_focus_all <- reactome_res[
-    grepl(
-        "PI3K|AKT|NFE2L2|NRF2|KEAP1",
-        reactome_res$ID,
-        ignore.case = TRUE
-    ),
-    ,
-    drop = FALSE
-]
-
-write.csv(
-    reactome_focus_all,
-    "09_GSEA/Reactome_PI3K_AKT_Nrf2_focus.csv",
-    row.names = FALSE
-)
-
-###############################################################################
-## 18. Single-pathway GSEA plots: NES/P/FDR shown in the title area
+## 16. Single-pathway GSEA plots
 ###############################################################################
 
 format_gsea_p <- function(x) {
@@ -1425,247 +1225,5 @@ plot_single_gsea(
     "GSEA_REACTOME_PI3K_AKT_ACTIVATION"
 )
 
-###############################################################################
-## 19. Directional GSEA ridgeplot
-##     GSEA exception: FDR < 0.05 if available, otherwise nominal P < 0.05,
-##     because FDR-significant pathways are not reached.
-###############################################################################
 
-select_gsea_terms <- function(
-    result_df,
-    top_n = 20,
-    fdr_cutoff = 0.05,
-    p_cutoff = 0.05
-) {
-    if (is.null(result_df) || nrow(result_df) == 0) {
-        return(list(
-            data = data.frame(),
-            mode = "None",
-            metric_col = NA_character_,
-            metric_label = "None"
-        ))
-    }
-
-    fdr_df <- result_df[
-        !is.na(result_df$p.adjust) & result_df$p.adjust < fdr_cutoff,
-        ,
-        drop = FALSE
-    ]
-
-    if (nrow(fdr_df) > 0) {
-        fdr_df <- fdr_df[order(fdr_df$p.adjust, fdr_df$pvalue), , drop = FALSE]
-        return(list(
-            data = head(fdr_df, top_n),
-            mode = "BH-adjusted FDR < 0.05",
-            metric_col = "p.adjust",
-            metric_label = "FDR"
-        ))
-    }
-
-    p_df <- result_df[
-        !is.na(result_df$pvalue) & result_df$pvalue < p_cutoff,
-        ,
-        drop = FALSE
-    ]
-
-    if (nrow(p_df) > 0) {
-        p_df <- p_df[order(p_df$pvalue), , drop = FALSE]
-        return(list(
-            data = head(p_df, top_n),
-            mode = "Nominal P < 0.05 (no FDR-significant pathway)",
-            metric_col = "pvalue",
-            metric_label = "P"
-        ))
-    }
-
-    fallback_df <- result_df[!is.na(result_df$pvalue), , drop = FALSE]
-    fallback_df <- fallback_df[order(fallback_df$pvalue), , drop = FALSE]
-
-    list(
-        data = head(fallback_df, top_n),
-        mode = "Top-ranked by nominal P; no pathway reached P < 0.05",
-        metric_col = "pvalue",
-        metric_label = "P"
-    )
-}
-
-make_directional_ridge <- function(
-    result_df,
-    gene_list,
-    database_name,
-    output_prefix,
-    remove_prefix,
-    top_n = 20
-) {
-    selected <- select_gsea_terms(result_df, top_n = top_n)
-    top_df <- selected$data
-
-    if (nrow(top_df) == 0) {
-        message(database_name, ": no GSEA pathway available for ridgeplot.")
-        return(NULL)
-    }
-
-    top_df$Pathway <- gsub(remove_prefix, "", top_df$ID)
-    top_df$Pathway <- gsub("_", " ", top_df$Pathway)
-    top_df$Pathway <- stringr::str_to_title(tolower(top_df$Pathway))
-    top_df$Direction2 <- ifelse(top_df$NES > 0, "ADHD enriched", "CTRL enriched")
-
-    metric_values <- top_df[[selected$metric_col]]
-    top_df$MetricValue <- metric_values
-
-    ridge_list <- lapply(
-        seq_len(nrow(top_df)),
-        function(i) {
-            core_string <- top_df$core_enrichment[i]
-            if (is.na(core_string) || core_string == "") return(NULL)
-
-            core_genes <- unlist(strsplit(core_string, "/", fixed = TRUE))
-            core_genes <- intersect(core_genes, names(gene_list))
-            if (length(core_genes) < 2) return(NULL)
-
-            data.frame(
-                Pathway = top_df$Pathway[i],
-                Gene = core_genes,
-                RankMetric = as.numeric(gene_list[core_genes]),
-                NES = top_df$NES[i],
-                pvalue = top_df$pvalue[i],
-                p.adjust = top_df$p.adjust[i],
-                MetricValue = top_df$MetricValue[i],
-                Direction = top_df$Direction2[i],
-                stringsAsFactors = FALSE
-            )
-        }
-    )
-
-    ridge_list <- ridge_list[!vapply(ridge_list, is.null, logical(1))]
-    if (length(ridge_list) == 0) {
-        message(database_name, ": no pathway had enough core-enrichment genes for ridgeplot.")
-        return(NULL)
-    }
-
-    ridge_df <- do.call(rbind, ridge_list)
-
-    order_df <- top_df[top_df$Pathway %in% unique(ridge_df$Pathway), , drop = FALSE]
-    order_df <- order_df[order(order_df$NES), , drop = FALSE]
-    pathway_levels <- order_df$Pathway
-
-    ridge_df$Pathway <- factor(ridge_df$Pathway, levels = pathway_levels)
-    order_df$Pathway <- factor(order_df$Pathway, levels = pathway_levels)
-
-    label_df <- order_df
-    label_df$metric_text <- vapply(
-        label_df$MetricValue,
-        format_stat_value,
-        FUN.VALUE = character(1)
-    )
-    label_df$stat_label <- paste0(
-        "NES ", sprintf("%+.2f", label_df$NES),
-        "   ", selected$metric_label, " ", label_df$metric_text
-    )
-
-    x_min <- min(ridge_df$RankMetric, na.rm = TRUE)
-    x_max <- max(ridge_df$RankMetric, na.rm = TRUE)
-    x_rng <- x_max - x_min
-    if (!is.finite(x_rng) || x_rng <= 0) x_rng <- 1
-    label_x <- x_max + 0.06 * x_rng
-    plot_xmax <- x_max + 0.42 * x_rng
-
-    p <- ggplot(
-        ridge_df,
-        aes(x = RankMetric, y = Pathway)
-    ) +
-        geom_vline(
-            xintercept = 0,
-            linetype = "dashed",
-            linewidth = 0.55,
-            color = "grey40"
-        ) +
-        ggridges::geom_density_ridges(
-            aes(fill = Direction),
-            scale = 1.15,
-            rel_min_height = 0.01,
-            alpha = 0.78,
-            color = "white",
-            linewidth = 0.25
-        ) +
-        geom_text(
-            data = label_df,
-            aes(x = label_x, y = Pathway, label = stat_label),
-            inherit.aes = FALSE,
-            hjust = 0,
-            size = 3.05,
-            color = "grey15"
-        ) +
-        scale_fill_manual(
-            values = c(
-                "ADHD enriched" = "#D9574F",
-                "CTRL enriched" = "#4C78A8"
-            )
-        ) +
-        coord_cartesian(
-            xlim = c(x_min, plot_xmax),
-            clip = "off"
-        ) +
-        labs(
-            title = paste0(database_name, " GSEA"),
-            subtitle = selected$mode,
-            x = expression(paste("CTRL-associated  ", "\u2190  limma moderated ", italic(t), " statistic  \u2192  ADHD-associated")),
-            y = NULL,
-            fill = "Enrichment direction"
-        ) +
-        theme_classic(base_size = 13) +
-        theme(
-            plot.title = element_text(size = 17, face = "bold", hjust = 0.5),
-            plot.subtitle = element_text(size = 10.5, hjust = 0.5, color = "grey35"),
-            axis.title.x = element_text(size = 12, face = "bold"),
-            axis.text.y = element_text(size = 9.5, color = "black"),
-            axis.line.y = element_blank(),
-            axis.ticks.y = element_blank(),
-            legend.position = "top",
-            plot.margin = margin(15, 115, 15, 15)
-        )
-
-    print(p)
-
-    ggsave(
-        file.path("09_GSEA/ridgeplot", paste0(output_prefix, ".pdf")),
-        p,
-        device = cairo_pdf,
-        width = 12,
-        height = 9.5
-    )
-
-    ggsave(
-        file.path("09_GSEA/ridgeplot", paste0(output_prefix, ".png")),
-        p,
-        width = 12,
-        height = 9.5,
-        dpi = 600
-    )
-
-    write.csv(
-        top_df,
-        file.path("09_GSEA/ridgeplot", paste0(output_prefix, "_selected.csv")),
-        row.names = FALSE
-    )
-
-    invisible(p)
-}
-
-make_directional_ridge(
-    hallmark_res,
-    gene_list,
-    database_name = "Hallmark",
-    output_prefix = "Hallmark_GSEA_directional_ridge",
-    remove_prefix = "^HALLMARK_",
-    top_n = 20
-)
-
-make_directional_ridge(
-    reactome_res,
-    gene_list,
-    database_name = "Reactome",
-    output_prefix = "Reactome_GSEA_directional_ridge",
-    remove_prefix = "^REACTOME_",
-    top_n = 20
 )
