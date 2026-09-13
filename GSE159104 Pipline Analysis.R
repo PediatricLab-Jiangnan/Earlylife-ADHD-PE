@@ -680,17 +680,13 @@ dev.off()
 ###############################################################################
 
 target_genes <- c(
-    "GAB1",
     "PIK3CA",
     "PIK3R1",
     "AKT1",
     "NFE2L2",
-    "TRIB3",
-    "GPX3",
-    "APPL2",
     "GCLC",
-    "AKT2",
     "NQO1"
+    Your own Genes Here
 )
 
 gene_check <- data.frame(
